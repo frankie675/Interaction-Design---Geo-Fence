@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geofence Trigger</title>
+</head>
+<body>
+    <h1>Geofence Trigger</h1>
+
+    <div class="input-group">
+        <h2>Set Geofence Parameters</h2>
+        <div class="input-group">
+            <label for="latitude">Center Latitude:</label>
+            <input type="number" id="latitude" step="0.0000001" placeholder="51.50460">
+        </div>
+        
+        <div class="input-group">
+            <label for="longitude">Center Longitude:</label>
+            <input type="number" id="longitude" step="0.0000001" placeholder="-2.56446">
+        </div>
+        
+        <div class="input-group">
+            <label for="radius">Radius (meters):</label>
+            <input type="number" id="radius" value="10" min="10" max="10000">
+        </div>
+        
+        <button id="use-current-location">Use My Current Location</button>
+        <button id="set-geofence">Set Geofence</button>
+    </div>
+    
+    <div id="status" class="outside">Geofence status: Not active</div>
+    <div id="last-update"></div>
+    
+    <div id="map"></div>
+    
+    <div id="trigger-content">
+        <h2>Welcome to the Geofence!</h2>
+    </div>
+    
+    <div id="exit-content">
+        <h2>Thank you for visiting!</h2>
+        <p>We hope to see you again soon.</p>
+    </div>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        #status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        
+        .outside {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .inside {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        
+        input {
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        #map {
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        
+        #trigger-content {
+            display: none;
+            padding: 20px;
+            background-color: #f0f8ff;
+            border-radius: 5px;
+            margin-top: 20px;
+            border: 1px solid #add8e6;
+        }
+        
+        #exit-content {
+            display: none;
+            padding: 20px;
+            background-color: #fff3cd;
+            border-radius: 5px;
+            margin-top: 20px;
+            border: 1px solid #ffeeba;
+        }
+        
+        #last-update {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+    
+    <script>
+        let locationTimerId;
+        let geofenceCircle;
+        let map;
+        let marker;
+        let geofenceActive = false;
+        let inside = false;
+        let firstTime = true;
+        let centerLat, centerLng, radius;
+        
+        // Initialize the map when the page loads
+        function initMap() {
+            // Default location
+            const defaultLocation = { lat: 51.454514, lng: -2.587910 };
+            
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: defaultLocation,
+                zoom: 15
+            });
+            
+            // Create a marker for the user's position
+            marker = new google.maps.Marker({
+                position: defaultLocation,
+                map: map,
+                title: 'Your Location'
+            });
+            
+            // Try to get the user's current location
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const pos = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        
+                        map.setCenter(pos);
+                        marker.setPosition(pos);
+                        
+                        
+                        document.getElementById('latitude').value = pos.lat;
+                        document.getElementById('longitude').value = pos.lng;
+                    },
+                    () => {
+                        console.log('Error: The Geolocation service failed.');
+                    }
+                );
+            }
+        }
+        
+        // Function to get the current location
+        document.getElementById('use-current-location').addEventListener('click', () => {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const pos = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        
+                        document.getElementById('latitude').value = pos.lat;
+                        document.getElementById('longitude').value = pos.lng;
+                        
+                        map.setCenter(pos);
+                        marker.setPosition(pos);
+                    },
+                    () => {
+                        alert('Error: Unable to retrieve your location.');
+                    }
+                );
+            } else {
+                alert('Error: Your browser doesn\'t support geolocation.');
+            }
+        });
+        
+        // Function to set up the geofence
+        document.getElementById('set-geofence').addEventListener('click', () => {
+            centerLat = parseFloat(document.getElementById('latitude').value);
+            centerLng = parseFloat(document.getElementById('longitude').value);
+            radius = parseFloat(document.getElementById('radius').value);
+            
+            if (isNaN(centerLat) || isNaN(centerLng) || isNaN(radius)) {
+                alert('Please enter valid values for latitude, longitude, and radius.');
+                return;
+            }
+            
+            // Clear previous geofence if it exists
+            if (geofenceCircle) {
+                geofenceCircle.setMap(null);
+            }
+            
+            
+            if (locationTimerId) {
+                clearInterval(locationTimerId);
+            }
+            
+            
+            firstTime = true;
+            inside = false;
+            
+            // Hide any displayed content
+            document.getElementById('trigger-content').style.display = 'none';
+            document.getElementById('exit-content').style.display = 'none';
+            
+            // draw  circle to represent geofence
+            const geofenceCenter = new google.maps.LatLng(centerLat, centerLng);
+            geofenceCircle = new google.maps.Circle({
+                strokeColor: '#FF0000',
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: '#FF0000',
+                fillOpacity: 0.35,
+                map: map,
+                center: geofenceCenter,
+                radius: radius
+            });
+            
+           
+            map.fitBounds(geofenceCircle.getBounds());
+            
+            // Start the location timer
+            startLocationTimer();
+        });
+        
+        // Function to update user location and check geofence status
+        function updateLocation() {
+            const statusElement = document.getElementById('status');
+            const triggerContent = document.getElementById('trigger-content');
+            const exitContent = document.getElementById('exit-content');
+            const lastUpdateElement = document.getElementById('last-update');
+            
+            if (!geofenceActive) {
+                statusElement.textContent = 'Geofence status: Active - Checking your position...';
+                statusElement.className = 'outside';
+                geofenceActive = true;
+            }
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const userLocation = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        
+                        // Update marker position
+                        marker.setPosition(userLocation);
+                        
+                        // Calculate distance from center of geofence
+                        const distance = calculateDistance(
+                            centerLat, centerLng,
+                            userLocation.lat, userLocation.lng
+                        );
+                        
+                        // Update last check time
+                        const now = new Date();
+                        lastUpdateElement.textContent = `Last location update: ${now.toLocaleTimeString()}`;
+                        
+                        // Check if user is inside the geofence
+                        if (distance <= radius) {
+                            if (!inside) {
+                                // entered the geofence
+                                inside = true;
+                                statusElement.textContent = `Geofence status: INSIDE (${distance.toFixed(2)}m from center)`;
+                                statusElement.className = 'inside';
+                                
+                                
+                                if (firstTime) {
+                                    //  entering geo fence
+                                    triggerContent.innerHTML = `
+                                        <h2>Welcome to the Geofence!</h2>
+                                        <p>You are in the Geo fence.</p>
+                                    `;
+                                    firstTime = false;
+                                } else {
+                                    // Re entering to the geofence
+                                    triggerContent.innerHTML = `
+                                        <h2>Welcome Back!</h2>
+                                        <p>Thanks for returning to the Geo fence.</p>
+                                    `;
+                                }
+                                
+                                triggerContent.style.display = 'block';
+                                exitContent.style.display = 'none';
+                            } else {
+                                statusElement.textContent = `Geofence status: INSIDE (${distance.toFixed(2)}m from center)`;
+                            }
+                        } else {
+                            if (inside) {
+                                
+                                inside = false;
+                                statusElement.textContent = `Geofence status: Outside (${distance.toFixed(2)}m from center)`;
+                                statusElement.className = 'outside';
+                                
+                                //  exit message
+                                triggerContent.style.display = 'none';
+                                exitContent.style.display = 'block';
+                            } else {
+                                statusElement.textContent = `Geofence status: Outside (${distance.toFixed(2)}m from center)`;
+                            }
+                        }
+                    },
+                    (error) => {
+                        statusElement.textContent = `Geofence error: ${error.message}`;
+                        statusElement.className = 'outside';
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            } else {
+                statusElement.textContent = 'Geofence error: Your browser doesn\'t support geolocation.';
+            }
+        }
+        
+        // Function to start the location timer
+        function startLocationTimer() {
+            // update loction
+            updateLocation();
+            
+            // interval to check every 10 seconds
+            locationTimerId = setInterval(updateLocation, 10000);
+        }
+        
+        // Calculate the distance between two points using the Haversine formula
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // Earth's radius in meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            
+            return R * c; // Distance in meters
+        }
+    </script>
+    
+    <!-- Google Maps JavaScript API -->
+    <script async defer
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCW4Vz7EVPewp-tAG6hBPJKbyq2XFDg93E&callback=initMap">
+    </script>
+</body>
+</html>
